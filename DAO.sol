@@ -256,6 +256,15 @@ contract DAOInterface {
         uint _proposalID,
         address _newCurator
     ) returns (bool _success);
+    
+    /// @notice ATTENTION! I confirm to move my remaining ether to a new DAO
+    /// with myself as the new Curator. This will burn my tokens. This can
+    /// not be undone and will split the DAO into two DAO's, with two
+    /// different underlying tokens.
+    /// @param _confirm Confirmation to proceed with solo split 
+    function splitSoloDAO(
+        bool _confirm
+    ) returns (bool _success);
 
     /// @dev can only be called by the DAO itself through a proposal
     /// updates the contract of the DAO by sending all ether and rewardTokens
@@ -679,6 +688,62 @@ contract DAO is DAOInterface, Token, TokenCreation {
         rewardToken[address(this)] -= rewardTokenToBeMoved;
 
         DAOpaidOut[address(p.splitData[0].newDAO)] += paidOutToBeMoved;
+        if (DAOpaidOut[address(this)] < paidOutToBeMoved)
+            throw;
+        DAOpaidOut[address(this)] -= paidOutToBeMoved;
+
+        // Burn DAO Tokens
+        Transfer(msg.sender, 0, balances[msg.sender]);
+        withdrawRewardFor(msg.sender); // be nice, and get his rewards
+        totalSupply -= balances[msg.sender];
+        balances[msg.sender] = 0;
+        paidOut[msg.sender] = 0;
+        return true;
+    }
+    
+    function splitSoloDAO(bool _confirm
+    ) noEther onlyTokenholders returns (bool _success) {
+        
+        // Ensure user confirms solo split and is not blocked
+        if (!_confirm || isBlocked(msg.sender))
+            throw;
+        
+        // Create new Solo DAO based off this contract
+        SplitData memory soloData;
+        soloData.newDAO = createNewDAO(msg.sender);
+        // Call depth limit reached, etc.
+        if (address(soloData.newDAO) == 0)
+            throw;
+        // should never happen
+        // Is this needed for solo split as well?
+        if (this.balance < sumOfProposalDeposits)
+            throw;
+        soloData.splitBalance = actualBalance();
+        soloData.rewardToken = rewardToken[address(this)];
+        soloData.totalSupply = totalSupply;
+
+        // Move ether and assign new Tokens
+        uint fundsToBeMoved =
+            (balances[msg.sender] * soloData.splitBalance) /
+            soloData.totalSupply;
+        if (soloData.newDAO.createTokenProxy.value(fundsToBeMoved)(msg.sender) == false)
+            throw;
+
+
+        // Assign reward rights to new DAO
+        uint rewardTokenToBeMoved =
+            (balances[msg.sender] * soloData.rewardToken) /
+            soloData.totalSupply;
+
+        uint paidOutToBeMoved = DAOpaidOut[address(this)] * rewardTokenToBeMoved /
+            rewardToken[address(this)];
+
+        rewardToken[address(soloData.newDAO)] += rewardTokenToBeMoved;
+        if (rewardToken[address(this)] < rewardTokenToBeMoved)
+            throw;
+        rewardToken[address(this)] -= rewardTokenToBeMoved;
+
+        DAOpaidOut[address(soloData.newDAO)] += paidOutToBeMoved;
         if (DAOpaidOut[address(this)] < paidOutToBeMoved)
             throw;
         DAOpaidOut[address(this)] -= paidOutToBeMoved;
